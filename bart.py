@@ -1165,7 +1165,7 @@ class BartModel(BartPretrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        sentimental_data: Optional[torch.DoubleTensor] = None
+        sentimental_data: Optional[torch.LongTensor] = None
     ) -> Union[Tuple, Seq2SeqModelOutput]:
 
         # different to other models, Bart automatically creates decoder_input_ids from
@@ -1190,7 +1190,7 @@ class BartModel(BartPretrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if encoder_outputs is None:
-            encoder_outputs = self.encoder(
+            encoder_outputs = self.encoder(            
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 head_mask=head_mask,
@@ -1216,12 +1216,14 @@ class BartModel(BartPretrainedModel):
 
         cls_outputs = encoder_outputs[0][:, 0, :]
         fnn_outputs = self.fnn_model.train_by_data_new(cls_outputs, sentimental_data)
-
+        fnn_outputs_=fnn_outputs.unsqueeze(1).unsqueeze(1).expand(-1,60,768) 
+        #encoder_outputs[0]+=fnn_outputs
+                
         # decoder outputs consists of (dec_features, past_key_value, dec_hidden, dec_attn)
         decoder_outputs = self.decoder(
             input_ids=decoder_input_ids,
             attention_mask=decoder_attention_mask,
-            encoder_hidden_states=encoder_outputs[0],
+            encoder_hidden_states=encoder_outputs[0]+fnn_outputs_,
             encoder_attention_mask=attention_mask,
             head_mask=decoder_head_mask,
             cross_attn_head_mask=cross_attn_head_mask,
@@ -1252,7 +1254,7 @@ class BartModel(BartPretrainedModel):
     "The BART Model with a language modeling head. Can be used for summarization.", BART_START_DOCSTRING
 )
 class BartForConditionalGeneration(BartPretrainedModel):
-    base_model_prefix = "model"
+    base_model_prefix = "model"  
     _keys_to_ignore_on_load_missing = [r"final_logits_bias", r"lm_head\.weight"]
 
     def __init__(self, config: BartConfig):
