@@ -25,6 +25,8 @@ class NNModel(nn.Module):
 class CustomNNModel:
 
     def __init__(self, input_dim, class_size, lr):
+        # self.first = True
+        self.loss_maximum = 0
         self.device = "cuda" # if torch.cuda.is_available() else "cpu"
         self.model = NNModel(input_dim, class_size).to(self.device)
         self.criterion = nn.CrossEntropyLoss().to(self.device)
@@ -57,7 +59,7 @@ class CustomNNModel:
         self.model.train()
         self.optimizer.zero_grad()
 
-        batch_data = batch_data.view(-1, self.input_dim).to(self.device)
+        batch_data = batch_data.view(-1, self.input_dim).to(self.device)  #shape: [32,768]
         answers = answers.to(self.device)
 
         hypothesis = self.model(batch_data)
@@ -71,4 +73,15 @@ class CustomNNModel:
         #         3, 3, 3, 3, 3, 3, 3, 3], device='cuda:0')
         # 형식의 데이터
         return results
+    
+    def test_data(self, batch_data):
+        self.model.train()
+        self.optimizer.zero_grad()
+        
+        batch_data=batch_data.view(-1,self.input_dim).to(self.device)
+        
+        hypothesis=self.model(batch_data)
+        answer=torch.argmax(hypothesis,dim=1)
+        loss=self.criterion(hypothesis,answer)
+        return answer
 
