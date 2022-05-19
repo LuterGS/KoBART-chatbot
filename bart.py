@@ -1223,16 +1223,19 @@ class BartModel(BartPretrainedModel):
         '''    
         if sentimental_data is not None:
             fnn_outputs = self.fnn_model.train_by_data_new(cls_outputs, sentimental_data)
-            expanded_cls=fnn_outputs.unsqueeze(1).unsqueeze(1).expand(-1,60,768) 
+            expanded_cls=fnn_outputs.unsqueeze(1).expand(-1,768) 
         else:
             answer = self.fnn_model.test_data(cls_outputs)
-            exanded_cls = answer.unsqueeze(1).unsqueeze(1).expand(-1,60,768) 
+            expanded_cls = answer.unsqueeze(1).expand(-1,768) 
+            #print(answer.size())   torch.Size([5])
+            
+        encoder_outputs[0][:, 0, :] = expanded_cls
         
         # decoder outputs consists of (dec_features, past_key_value, dec_hidden, dec_attn)
         decoder_outputs = self.decoder(
             input_ids=decoder_input_ids,
             attention_mask=decoder_attention_mask,
-            encoder_hidden_states=encoder_outputs[0]+expanded_cls,
+            encoder_hidden_states=encoder_outputs[0],
             encoder_attention_mask=attention_mask,
             head_mask=decoder_head_mask,
             cross_attn_head_mask=cross_attn_head_mask,
