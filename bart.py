@@ -1253,14 +1253,15 @@ class BartForConditionalGeneration(BartPretrainedModel):
         self.fnn_size = 512
         self.register_buffer("final_logits_bias", torch.zeros((1, self.model.shared.num_embeddings)))
         # lm_head 의 input layer 를 1280 으로 늘려도, 어떤 영문에서인지 forward 하면서 호출하면 여전히 768 인것으로 인식함.
-        self.lm_head = nn.Linear(config.d_model, self.model.shared.num_embeddings, bias=False)
-        self.fnn_head = nn.Linear(self.fnn_size, self.model.shared.num_embeddings, bias=False)
+        self.lm_head = nn.Linear(1280, self.model.shared.num_embeddings, bias=False)
+        self.fnn_head = nn.Linear(self.fnn_size, self.model.shared.num_embeddings, bias=False).to("cuda")
 
         # adept model
         self.fnn_model = CustomNNModel(config.d_model, 6, 0.01)
 
         # Initialize weights and apply final processing
         self.post_init()
+        # print(self.lm_head.in_features, self.lm_head.out_features, self.lm_head.training, self.lm_head.weight.size())
 
     def get_encoder(self):
         return self.model.get_encoder()
@@ -1355,8 +1356,10 @@ class BartForConditionalGeneration(BartPretrainedModel):
         cls_outputs = outputs[0][:, 0, :]
 
         # 해당 cls 토큰을 이용해 한 번 학습 및 데이터 가져오기
+        # train 일 때
         if sentimental_data is not None:
             fnn_hidden_layer = self.fnn_model.train_by_data(cls_outputs, sentimental_data)
+        # test 일 때
         else:
             fnn_hidden_layer = self.fnn_model.test_data(cls_outputs)
 
@@ -1364,10 +1367,24 @@ class BartForConditionalGeneration(BartPretrainedModel):
         # fnn_outputs [32, 60, 512]
         fnn_outputs = fnn_hidden_layer.unsqueeze(1).expand(-1, 60, -1)
 
-        #lm_logits = torch.cat([outputs[0], fnn_outputs], axis=-1)
         bart_lm_logits = self.lm_head(outputs[0])
-        fnn_lm_logits = self.fnn_head(fnn_outputs)
+        # cuda, cpu 에 맞춘 처리
+        if not outputs[0].is_cuda:
+            fnn_outputs = fnn_outputs.to('cpu')
+            fnn_lm_logits = self.fnn_head(fnn_outputs)
+            fnn_lm_logits = fnn_lm_logits.to('cpu')
+        else:
+            fnn_lm_logits = self.fnn_head(fnn_outputs)
+
+        # self.lm_head 의 크기를 변경할 순 있으나, Pretrained 된 weight 를 불러올 때 자동으로 768 size 로 변환됨.
+        # 따라서 FNN 과 BART 의 embedding output 을 따로 구하고 loss 만 같이 줄이기로 함.
+        # lm_logits = torch.cat([outputs[0], fnn_outputs], axis=-1)
+        # print(lm_logits.size(), self.lm_head.weight.size())
+        # self.lm_head(lm_logits)
+        # self.lm_head 를 선언부에서 바꿔도 여기서 사용할 때 length 가 768로 고정됨.
+        # RuntimeError: mat1 and mat2 shapes cannot be multiplied (1920x1280 and 768x30000)
         final_lm_logits = bart_lm_logits + fnn_lm_logits + self.final_logits_bias
+        # final_lm_logits = bart_lm_logits + self.final_logits_bias
 
         masked_lm_loss = None
         if labels is not None:
