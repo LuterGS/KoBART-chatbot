@@ -1120,8 +1120,6 @@ class BartModel(BartPretrainedModel):
         self.encoder = BartEncoder(config, self.shared)
         self.decoder = BartDecoder(config, self.shared)
 
-        # adept model
-        self.fnn_model = CustomNNModel(768, 6, 0.01)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1211,17 +1209,6 @@ class BartModel(BartPretrainedModel):
                 attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,
             )
 
-        # print(len(encoder_outputs))           1
-        # print(encoder_outputs[0].size())      32, 60 ,768
-
-        cls_outputs = encoder_outputs[0][:, 0, :]
-        if sentimental_data is not None:
-            fnn_outputs, loss = self.fnn_model.train_by_data_new(cls_outputs, sentimental_data)
-        else:
-            loss = self.fnn_model.test_data(cls_outputs)
-        encoder_outputs[0][:, 0, :] = loss
-
-
         # decoder outputs consists of (dec_features, past_key_value, dec_hidden, dec_attn)
         decoder_outputs = self.decoder(
             input_ids=decoder_input_ids,
@@ -1263,8 +1250,14 @@ class BartForConditionalGeneration(BartPretrainedModel):
     def __init__(self, config: BartConfig):
         super().__init__(config)
         self.model = BartModel(config)
+        self.fnn_size = 512
         self.register_buffer("final_logits_bias", torch.zeros((1, self.model.shared.num_embeddings)))
+        # lm_head 의 input layer 를 1280 으로 늘려도, 어떤 영문에서인지 forward 하면서 호출하면 여전히 768 인것으로 인식함.
         self.lm_head = nn.Linear(config.d_model, self.model.shared.num_embeddings, bias=False)
+        self.fnn_head = nn.Linear(self.fnn_size, self.model.shared.num_embeddings, bias=False)
+
+        # adept model
+        self.fnn_model = CustomNNModel(config.d_model, 6, 0.01)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1337,6 +1330,8 @@ class BartForConditionalGeneration(BartPretrainedModel):
                 )
 
         # model.forward
+        # KoBartConditionalGeneration 의 Output 은 Seq2SeqModelOutput 임.
+        # size 는 [32, 60, 768]
         outputs = self.model(
             input_ids,
             attention_mask=attention_mask,
@@ -1355,20 +1350,37 @@ class BartForConditionalGeneration(BartPretrainedModel):
             return_dict=return_dict,
             sentimental_data=sentimental_data
         )
-        lm_logits = self.lm_head(outputs[0]) + self.final_logits_bias
+
+        # cls 토큰 추출
+        cls_outputs = outputs[0][:, 0, :]
+
+        # 해당 cls 토큰을 이용해 한 번 학습 및 데이터 가져오기
+        if sentimental_data is not None:
+            fnn_hidden_layer = self.fnn_model.train_by_data(cls_outputs, sentimental_data)
+        else:
+            fnn_hidden_layer = self.fnn_model.test_data(cls_outputs)
+
+        # unsqueeze
+        # fnn_outputs [32, 60, 512]
+        fnn_outputs = fnn_hidden_layer.unsqueeze(1).expand(-1, 60, -1)
+
+        #lm_logits = torch.cat([outputs[0], fnn_outputs], axis=-1)
+        bart_lm_logits = self.lm_head(outputs[0])
+        fnn_lm_logits = self.fnn_head(fnn_outputs)
+        final_lm_logits = bart_lm_logits + fnn_lm_logits + self.final_logits_bias
 
         masked_lm_loss = None
         if labels is not None:
             loss_fct = CrossEntropyLoss()
-            masked_lm_loss = loss_fct(lm_logits.view(-1, self.config.vocab_size), labels.view(-1))
+            masked_lm_loss = loss_fct(final_lm_logits.view(-1, self.config.vocab_size), labels.view(-1))
 
         if not return_dict:
-            output = (lm_logits,) + outputs[1:]
+            output = (final_lm_logits,) + outputs[1:]
             return ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
 
         return Seq2SeqLMOutput(
             loss=masked_lm_loss,
-            logits=lm_logits,
+            logits=final_lm_logits,
             past_key_values=outputs.past_key_values,
             decoder_hidden_states=outputs.decoder_hidden_states,
             decoder_attentions=outputs.decoder_attentions,
