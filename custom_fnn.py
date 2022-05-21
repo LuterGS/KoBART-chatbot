@@ -68,16 +68,11 @@ class CustomNNModel:
         loss.backward(retain_graph=True)
         self.optimizer.step()
 
-        if self.first:
-            self.loss_maximum = loss
-            self.first = False
-        real_loss = (loss / self.loss_maximum).clone().detach()
-
         results = torch.argmax(hypothesis, dim=1)
         # tensor([3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
         #         3, 3, 3, 3, 3, 3, 3, 3], device='cuda:0')
         # 형식의 데이터
-        return results, real_loss
+        return results
 
     def test_data(self, batch_data):
         self.model.train()
@@ -88,7 +83,6 @@ class CustomNNModel:
         hypothesis = self.model(batch_data)
         answer = torch.argmax(hypothesis, dim=1)
         loss = self.criterion(hypothesis, answer)
-        real_loss = (loss / self.loss_maximum).clone().detach()
-        return real_loss
+        return answer
 
 

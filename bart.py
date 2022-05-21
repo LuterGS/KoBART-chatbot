@@ -1214,12 +1214,12 @@ class BartModel(BartPretrainedModel):
         # print(len(encoder_outputs))           1
         # print(encoder_outputs[0].size())      32, 60 ,768
 
-        cls_outputs = encoder_outputs[0][:, 0, :]
-        if sentimental_data is not None:
-            fnn_outputs, loss = self.fnn_model.train_by_data_new(cls_outputs, sentimental_data)
-        else:
-            loss = self.fnn_model.test_data(cls_outputs)
-        encoder_outputs[0][:, 0, :] = loss
+        # cls_outputs = encoder_outputs[0][:, 0, :]
+        # if sentimental_data is not None:
+        #     fnn_outputs, loss = self.fnn_model.train_by_data_new(cls_outputs, sentimental_data)
+        # else:
+        #     loss = self.fnn_model.test_data(cls_outputs)
+        # encoder_outputs[0][:, 0, :] = loss
 
 
         # decoder outputs consists of (dec_features, past_key_value, dec_hidden, dec_attn)
@@ -1237,6 +1237,18 @@ class BartModel(BartPretrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
+
+        cls_outputs = decoder_outputs[0][:, 0, :]
+        if sentimental_data is not None:
+            fnn_outputs = self.fnn_model.train_by_data_new(cls_outputs, sentimental_data)
+            expanded_cls = fnn_outputs.unsqueeze(1).expand(-1,768) 
+            # fnn_outputs, loss = self.fnn_model.train_by_data_new(cls_outputs, sentimental_data)
+        else:
+            answer = self.fnn_model.test_data(cls_outputs)
+            expanded_cls = answer.unsqueeze(1).expand(-1,768)
+            # loss = self.fnn_model.test_data(cls_outputs)
+            
+        decoder_outputs[0][:, 0, :] = expanded_cls
 
         if not return_dict:
             return decoder_outputs + encoder_outputs
