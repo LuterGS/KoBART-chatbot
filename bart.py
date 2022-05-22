@@ -23,6 +23,7 @@ import torch
 import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
+import torch.nn.functional as F
 
 from custom_fnn import CustomNNModel
 from custom_transformers.activations import ACT2FN
@@ -1259,6 +1260,9 @@ class BartForConditionalGeneration(BartPretrainedModel):
         # adept model
         self.fnn_model = CustomNNModel(config.d_model, 6, 0.01)
 
+        # linear model that turn 1280 -> 768
+        self.squeeze_layer = nn.Linear(1280, 768, bias=False).to('cuda')
+
         # Initialize weights and apply final processing
         self.post_init()
         # print(self.lm_head.in_features, self.lm_head.out_features, self.lm_head.training, self.lm_head.weight.size())
@@ -1352,23 +1356,24 @@ class BartForConditionalGeneration(BartPretrainedModel):
             sentimental_data=sentimental_data
         )
 
-        # cls 토큰 추출
-        cls_outputs = outputs[0][:, 0, :]
+        # cls 토큰 추출 - outputs.encoder_last_hidden_state로부터 추출
+        cls_outputs = outputs.encoder_last_hidden_state[:, 0, :]
 
-        # 해당 cls 토큰을 이용해 한 번 학습 및 데이터 가져오기
-        # train 일 때
+        # 해당 cls 토큰을 이용해 한 번 학습 및 데이터 가져오기 및 변환
+        # train 일 때는 60차원으로 늘림
         if sentimental_data is not None:
             fnn_hidden_layer = self.fnn_model.train_by_data(cls_outputs, sentimental_data)
-        # test 일 때
+            fnn_outputs = fnn_hidden_layer.unsqueeze(1).expand(-1, 60, -1)
+        # test 일때는 1차원으로 유지 (test 시의 outputs.last_hidden_state 의 크기가 [5, 1, 768] 임
         else:
             fnn_hidden_layer = self.fnn_model.test_data(cls_outputs)
-
-        # unsqueeze
-        # fnn_outputs [32, 60, 512]
-        fnn_outputs = fnn_hidden_layer.unsqueeze(1).expand(-1, 60, -1)
+            fnn_outputs = fnn_hidden_layer.unsqueeze(1).expand(-1, 1, -1)
 
         bart_lm_logits = self.lm_head(outputs[0])
         # cuda, cpu 에 맞춘 처리
+        # self.lm_head 의 크기를 변경할 순 있으나, Pretrained 된 weight 를 불러올 때 자동으로 768 size 로 변환됨.
+        # 따라서 FNN 과 BART 의 embedding output 을 따로 구하고 loss 만 같이 줄이기로 함.
+        # RuntimeError: mat1 and mat2 shapes cannot be multiplied (1920x1280 and 768x30000)
         if not outputs[0].is_cuda:
             fnn_outputs = fnn_outputs.to('cpu')
             fnn_lm_logits = self.fnn_head(fnn_outputs)
@@ -1376,15 +1381,14 @@ class BartForConditionalGeneration(BartPretrainedModel):
         else:
             fnn_lm_logits = self.fnn_head(fnn_outputs)
 
-        # self.lm_head 의 크기를 변경할 순 있으나, Pretrained 된 weight 를 불러올 때 자동으로 768 size 로 변환됨.
-        # 따라서 FNN 과 BART 의 embedding output 을 따로 구하고 loss 만 같이 줄이기로 함.
-        # lm_logits = torch.cat([outputs[0], fnn_outputs], axis=-1)
-        # print(lm_logits.size(), self.lm_head.weight.size())
-        # self.lm_head(lm_logits)
-        # self.lm_head 를 선언부에서 바꿔도 여기서 사용할 때 length 가 768로 고정됨.
-        # RuntimeError: mat1 and mat2 shapes cannot be multiplied (1920x1280 and 768x30000)
         final_lm_logits = bart_lm_logits + fnn_lm_logits + self.final_logits_bias
-        # final_lm_logits = bart_lm_logits + self.final_logits_bias
+
+        # 실제 output 조정 반영
+        concated_output = torch.cat([outputs.last_hidden_state, fnn_outputs], axis=-1)
+        unsqueezed_output = self.squeeze_layer(concated_output)
+        final_output = unsqueezed_output
+        # final_output = F.sigmoid(unsqueezed_output)
+        outputs.last_hidden_state = final_output
 
         masked_lm_loss = None
         if labels is not None:
