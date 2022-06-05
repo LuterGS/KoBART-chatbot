@@ -35,7 +35,7 @@ class MainFastAPI:
         self._app.add_api_route(
             **self._get_ai_message_property,
             endpoint=self.get_ai_message,
-            methods=["GET"]
+            methods=["POST"]
         )
         self._model = model
         self._model.model.eval()

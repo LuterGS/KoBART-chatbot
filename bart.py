@@ -1392,6 +1392,7 @@ class BartForConditionalGeneration(BartPretrainedModel):
 
         masked_lm_loss = None
         if labels is not None:
+            labels = labels.type(torch.cuda.LongTensor)
             loss_fct = CrossEntropyLoss()
             masked_lm_loss = loss_fct(final_lm_logits.view(-1, self.config.vocab_size), labels.view(-1))
 
